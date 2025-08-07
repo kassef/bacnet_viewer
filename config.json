@@ -2,6 +2,7 @@
   "local_device_id": ["device", 123],
   "interface": "127.0.0.1",
   "port": 47808,
+  "local_port": 0,
   "broadcast_address": "127.0.0.1",
   "vendor_identifier": 999,
   "vendor_name": "MyCompany"
