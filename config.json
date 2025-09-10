@@ -1,9 +1,14 @@
 {
-  "local_device_id": ["device", 123],
-  "interface": "127.0.0.1",
-  "port": 47808,
+  "interface": "192.168.1.10/24",
   "local_port": 0,
-  "broadcast_address": "127.0.0.1",
+  "broadcast_address": "192.168.1.255/24",
+  "port": 47808,
+  "local_device_id": 599999,
   "vendor_identifier": 999,
-  "vendor_name": "MyCompany"
+  "vendor_name": "Domobo",
+  "scan_interval": 15,
+  "request_timeout": 3,
+  "request_retries": 1,
+  "concurrency": 16,
+  "csv_export_path": "devices.csv"
 }
