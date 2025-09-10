@@ -1,9 +1,14 @@
 {
-  "local_device_id": ["device", 123],
-  "interface": "127.0.0.1",
+  "interface": "192.168.163.100/24",
+  "local_port": 47808,
+  "broadcast_address": "192.168.163.255",
   "port": 47808,
-  "local_port": 0,
-  "broadcast_address": "127.0.0.1",
+  "local_device_id": 12345,
   "vendor_identifier": 999,
-  "vendor_name": "MyCompany"
+  "vendor_name": "test",
+  "scan_interval": 30,
+  "request_timeout": 7,
+  "request_retries": 1,
+  "concurrency": 16,
+  "csv_export_path": "devices.csv"
 }

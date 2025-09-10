@@ -32,7 +32,7 @@ async def main():
     # build our “scanner” device
     scanner = DeviceObject(
         objectName="BACnetDebugger",
-        objectIdentifier=tuple(cfg["local_device_id"]),
+        objectIdentifier=("device", cfg["local_device_id"]),
         vendorIdentifier=cfg["vendor_identifier"],
         vendorName=cfg["vendor_name"],
         maxApduLengthAccepted=1024,
@@ -40,8 +40,9 @@ async def main():
     )
 
     # bind & target
-    local_addr  = IPv4Address(f"{cfg['interface']}/24", cfg.get("local_port", 0))
-    target_addr = IPv4Address(f"{cfg['broadcast_address']}/24", cfg["port"])
+    local_addr  = IPv4Address(cfg["interface"], cfg.get("local_port", 47808))
+    target_addr = IPv4Address(cfg["broadcast_address"], cfg["port"])
+
     app = NormalApplication(scanner, local_addr)
 
     interval = cfg.get("scan_interval", 30)
@@ -50,7 +51,8 @@ async def main():
     try:
         while True:
             print(f"\n[INFO] Sending Who-Is to {target_addr}")
-            i_ams = await app.who_is(0, 4_194_303, address=target_addr)
+            # i_ams = await app.who_is(0, 4_194_303, address=target_addr)
+            i_ams = await app.who_is(timeout=cfg.get("request_timeout", 5))
 
             print("[INFO] Discovered devices:")
             if i_ams:
