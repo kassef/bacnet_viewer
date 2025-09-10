@@ -21,15 +21,23 @@ These scripts run a local BACnet/IP device until interrupted.
 
 ## Discovering devices
 
-Use `discover_devices.py` to continuously send Who-Is requests and display
-responses:
+`main.py` provides an interactive discovery and browsing CLI built with
+**bacpypes3**. It loads defaults from `config.json` and supports overrides via
+command line flags:
+
+```bash
+python main.py --iface 192.168.1.10/24 --bcast 192.168.1.255/24
+```
+
+After discovering devices it lets you inspect the objects of a selected device
+and export results to CSV.
+
+For a very small alternative using **BAC0**, run `discover_devices.py`. It
+continuously sends Who-Is requests and prints any responses:
 
 ```bash
 python discover_devices.py 192.168.1.100/24 --interval 10
 ```
-
-`main.py` is an alternative scanner that loads its configuration from
-`config.json` and uses bacpypes3.
 
 ## Installation
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Continuously display BACnet devices that respond to Who-Is"""
+"""Quick BAC0-based Who-Is scanner used as an alternative to ``main.py``."""
 import argparse
 import time
 
