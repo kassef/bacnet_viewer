@@ -14,6 +14,7 @@ from bacpypes3.ipv4.app import NormalApplication
 from bacpypes3.ipv4.link import IPv4Address
 
 
+
 DEFAULT_PORT = 47808
 DEFAULT_SCAN_INTERVAL = 30
 DEFAULT_TIMEOUT = 7
@@ -114,13 +115,48 @@ async def safe_read_property(app, addr, obj_id, prop, timeout=7.0, retries=1):
     raise RuntimeError("unreachable")
 
 
-async def get_object_list(app, addr, device_instance, timeout=7.0, retries=1) -> list[tuple[str, int]]:
+async def get_object_list(app, addr, device_instance, timeout=7.0, retries=1,
+                          bruteforce=False, max_index=64, concurrency=16) -> list[tuple[str, int]]:
+    dev_oid = ("device", device_instance)
+
+    # Try bulk read
     try:
-        lst = await safe_read_property(app, addr, ("device", device_instance), "objectList", timeout, retries)
+        lst = await safe_read_property(app, addr, dev_oid, "objectList", timeout, retries)
         return list(lst)
     except Exception as e:
-        print(f"[WARN] objectList read failed: {e}")
-        return []
+        print(f"[WARN] bulk objectList read failed on {device_instance}: {e}")
+
+    # Try indexed array access (length at [0], then 1..N)
+    try:
+        count = await safe_read_property(app, addr, dev_oid, ("objectList", 0), timeout, retries)
+        if isinstance(count, int) and count > 0:
+            sem = asyncio.Semaphore(concurrency)
+            async def _read_idx(i: int):
+                async with sem:
+                    try:
+                        oid = await safe_read_property(app, addr, dev_oid, ("objectList", i), timeout, retries)
+                        return tuple(oid)
+                    except Exception as ex:
+                        print(f"[WARN] objectList[{i}] read failed: {ex}")
+                        return None
+            entries = await asyncio.gather(*(_read_idx(i) for i in range(1, count + 1)))
+            entries = [e for e in entries if e]
+            if entries:
+                return entries
+    except Exception as e:
+        print(f"[WARN] objectList length read failed on {device_instance}: {e}")
+
+    # Brute-force fallback
+    if bruteforce:
+        print(f"[INFO] Falling back to brute-force scan (max-index={max_index})…")
+        found = await bruteforce_object_ids(
+            app, addr, max_index=max_index, timeout=timeout, retries=retries, concurrency=concurrency
+        )
+        if found:
+            return found
+
+    # Minimal fallback: return the device object so UI still shows something
+    return [("device", device_instance)]
 
 
 async def read_object_snapshot(app, addr, oid, timeout=7.0, retries=1) -> dict:
@@ -203,7 +239,14 @@ async def inspect_loop(app, devices, selected, inspect_timeout, retries, concurr
     while True:
         addr, dev_id, _ = current
         print(f"[INFO] Reading objectList for device {dev_id} @ {format_address(addr)}")
-        obj_list = await get_object_list(app, addr, dev_id, inspect_timeout, retries)
+        # obj_list = await get_object_list(app, addr, dev_id, inspect_timeout, retries)
+        obj_list = await get_object_list(
+            app, addr, dev_id,
+            timeout=inspect_timeout, retries=retries,
+            bruteforce=True,              # enable fallback
+            max_index=64,
+            concurrency=concurrency
+        )
         sem = asyncio.Semaphore(concurrency)
 
         async def _snap(oid):
@@ -262,6 +305,46 @@ async def inspect_loop(app, devices, selected, inspect_timeout, retries, concurr
         # continue outer loop with new current
 
 
+COMMON_TYPES = [
+    "analogInput", "analogValue", "analogOutput",
+    "binaryInput", "binaryValue", "binaryOutput",
+    "multiStateInput", "multiStateValue", "multiStateOutput",
+    # add more if you like: 'device','schedule','trendLog','lifeSafetyPoint', ...
+]
+
+async def probe_object_exists(app, addr, obj_id, timeout=7.0, retries=1) -> bool:
+    # Fast existence test: try to read objectName (or objectType)
+    try:
+        _ = await safe_read_property(app, addr, obj_id, "objectName", timeout, retries)
+        return True
+    except Exception:
+        try:
+            _ = await safe_read_property(app, addr, obj_id, "objectType", timeout, retries)
+            return True
+        except Exception:
+            return False
+
+async def bruteforce_object_ids(app, addr, max_index=64, timeout=7.0, retries=1,
+                                types: list[str] = None, concurrency=16) -> list[tuple[str, int]]:
+    if types is None:
+        types = COMMON_TYPES
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _try_one(typ: str, idx: int):
+        oid = (typ, idx)
+        async with sem:
+            ok = await probe_object_exists(app, addr, oid, timeout, retries)
+            return oid if ok else None
+
+    tasks = []
+    for typ in types:
+        for i in range(max_index + 1):
+            tasks.append(_try_one(typ, i))
+
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+    return [r for r in results if r]
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Zero-config BACnet/IP device discovery")
     parser.add_argument("--config", help="Optional path to config.json (if omitted, auto-detect NIC)")
@@ -272,6 +355,10 @@ async def main():
     parser.add_argument("--inspect-timeout", type=float, help="Timeout for property reads during inspect (s)")
     parser.add_argument("--retries", type=int, default=1, help="Retries for property reads")
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY, help="Concurrent property reads")
+    parser.add_argument("--bruteforce", action="store_true",
+                    help="Probe common object types if objectList is unavailable")
+    parser.add_argument("--max-index", type=int, default=64,
+                        help="Max index per object type when bruteforcing (default 64)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -291,17 +378,29 @@ async def main():
     concurrency = args.concurrency
 
     # Local scanner device
+    # scanner = DeviceObject(
+    #     objectName="BACnetDebugger",
+    #     objectIdentifier=("device", cfg["local_device_id"]),
+    #     vendorIdentifier=cfg["vendor_identifier"],
+    #     vendorName=cfg["vendor_name"],
+    #     maxApduLengthAccepted=1024,
+    #     segmentationSupported="noSegmentation",
+    # )
+
     scanner = DeviceObject(
         objectName="BACnetDebugger",
         objectIdentifier=("device", cfg["local_device_id"]),
         vendorIdentifier=cfg["vendor_identifier"],
         vendorName=cfg["vendor_name"],
-        maxApduLengthAccepted=1024,
-        segmentationSupported="noSegmentation",
+        maxApduLengthAccepted=1476,          # was 1024
+        segmentationSupported="segmentedBoth"  # was "noSegmentation"
     )
+
 
     local_addr = IPv4Address(cfg["interface"], cfg["local_port"])
     app = NormalApplication(scanner, local_addr)
+    # app = NormalApplication(scanner, IPv4ForeignDevice("192.168.163.100/24", 47808, bbmd_addr, ttl=300))
+
 
     print(f"[INFO] Bound to {cfg['interface']} on UDP {cfg['local_port']}")
     print(
@@ -360,6 +459,7 @@ async def main():
         print("\n[INFO] Stopped by user")
     finally:
         app.close()
+
 
 
 if __name__ == "__main__":
