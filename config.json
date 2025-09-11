@@ -7,7 +7,7 @@
   "vendor_identifier": 999,
   "vendor_name": "test",
   "scan_interval": 30,
-  "request_timeout": 7,
+  "request_timeout": 12,
   "request_retries": 1,
   "concurrency": 16,
   "csv_export_path": "devices.csv"
