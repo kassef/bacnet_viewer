@@ -19,6 +19,7 @@ DEFAULT_PORT = 47808
 DEFAULT_SCAN_INTERVAL = 30
 DEFAULT_TIMEOUT = 7
 DEFAULT_CONCURRENCY = 16
+DEFAULT_MAX_INDEX = 256
 
 
 def detect_primary_ipv4() -> tuple[str, str]:
@@ -116,7 +117,9 @@ async def safe_read_property(app, addr, obj_id, prop, timeout=7.0, retries=1):
 
 
 async def get_object_list(app, addr, device_instance, timeout=7.0, retries=1,
-                          bruteforce=False, max_index=64, concurrency=16) -> list[tuple[str, int]]:
+                          bruteforce=False, max_index=DEFAULT_MAX_INDEX,
+                          types: list[str] | None = None,
+                          concurrency=16) -> list[tuple[str, int]]:
     dev_oid = ("device", device_instance)
 
     # Try bulk read
@@ -150,7 +153,13 @@ async def get_object_list(app, addr, device_instance, timeout=7.0, retries=1,
     if bruteforce:
         print(f"[INFO] Falling back to brute-force scan (max-index={max_index})…")
         found = await bruteforce_object_ids(
-            app, addr, max_index=max_index, timeout=timeout, retries=retries, concurrency=concurrency
+            app,
+            addr,
+            max_index=max_index,
+            types=types,
+            timeout=timeout,
+            retries=retries,
+            concurrency=concurrency,
         )
         if found:
             return found
@@ -234,19 +243,44 @@ def select_device(choice: str, devices: list[tuple]):
     return None
 
 
-async def inspect_loop(app, devices, selected, inspect_timeout, retries, concurrency):
+async def print_basic_device_info(app, addr, dev_id, timeout=7.0, retries=1) -> None:
+    """Read and print common Device properties."""
+    props = {
+        "objectName": "Name",
+        "vendorName": "Vendor",
+        "modelName": "Model",
+        "protocolVersion": "ProtocolVersion",
+        "protocolRevision": "ProtocolRevision",
+        "applicationSoftwareVersion": "AppVersion",
+    }
+    dev_oid = ("device", dev_id)
+    for prop, label in props.items():
+        try:
+            value = await safe_read_property(app, addr, dev_oid, prop, timeout, retries)
+            print(f"[INFO] {label}: {value}")
+        except Exception as e:
+            print(f"[WARN] {label} read failed: {e}")
+
+
+async def inspect_loop(app, devices, selected, inspect_timeout, retries, concurrency,
+                       bruteforce, max_index, types):
     current = selected
     while True:
         addr, dev_id, _ = current
         print(f"[INFO] Reading objectList for device {dev_id} @ {format_address(addr)}")
-        # obj_list = await get_object_list(app, addr, dev_id, inspect_timeout, retries)
         obj_list = await get_object_list(
-            app, addr, dev_id,
-            timeout=inspect_timeout, retries=retries,
-            bruteforce=True,              # enable fallback
-            max_index=64,
-            concurrency=concurrency
+            app,
+            addr,
+            dev_id,
+            timeout=inspect_timeout,
+            retries=retries,
+            bruteforce=bruteforce,
+            max_index=max_index,
+            types=types,
+            concurrency=concurrency,
         )
+        if len(obj_list) == 1 and obj_list[0] == ("device", dev_id):
+            await print_basic_device_info(app, addr, dev_id, inspect_timeout, retries)
         sem = asyncio.Semaphore(concurrency)
 
         async def _snap(oid):
@@ -324,8 +358,9 @@ async def probe_object_exists(app, addr, obj_id, timeout=7.0, retries=1) -> bool
         except Exception:
             return False
 
-async def bruteforce_object_ids(app, addr, max_index=64, timeout=7.0, retries=1,
-                                types: list[str] = None, concurrency=16) -> list[tuple[str, int]]:
+async def bruteforce_object_ids(app, addr, max_index=DEFAULT_MAX_INDEX,
+                                types: list[str] = None, timeout=7.0,
+                                retries=1, concurrency=16) -> list[tuple[str, int]]:
     if types is None:
         types = COMMON_TYPES
     sem = asyncio.Semaphore(concurrency)
@@ -357,9 +392,15 @@ async def main():
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY, help="Concurrent property reads")
     parser.add_argument("--bruteforce", action="store_true",
                     help="Probe common object types if objectList is unavailable")
-    parser.add_argument("--max-index", type=int, default=64,
-                        help="Max index per object type when bruteforcing (default 64)")
+    parser.add_argument("--max-index", type=int, default=DEFAULT_MAX_INDEX,
+                        help=f"Max index per object type when bruteforcing (default {DEFAULT_MAX_INDEX})")
+    parser.add_argument("--types",
+                        help="Comma-separated object types to probe (default common types)")
     args = parser.parse_args()
+
+    types = COMMON_TYPES
+    if args.types:
+        types = [t.strip() for t in args.types.split(",") if t.strip()]
 
     cfg = load_config(args.config)
     # CLI overrides
@@ -448,7 +489,17 @@ async def main():
                 if not sel:
                     print("[WARN] Invalid selection")
                     continue
-                result = await inspect_loop(app, devices, sel, inspect_timeout, retries, concurrency)
+                result = await inspect_loop(
+                    app,
+                    devices,
+                    sel,
+                    inspect_timeout,
+                    retries,
+                    concurrency,
+                    bruteforce=args.bruteforce,
+                    max_index=args.max_index,
+                    types=types,
+                )
                 if result == "rescan":
                     break
                 if result == "quit":
