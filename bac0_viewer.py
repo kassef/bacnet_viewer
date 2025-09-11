@@ -9,7 +9,6 @@ configuration values.
 """
 
 import argparse
-import asyncio
 import csv
 import json
 import socket
@@ -269,7 +268,7 @@ def select_device(choice: str, devices: List[Tuple[str, int, str]]):
     return None
 
 
-async def inspect_loop(
+def inspect_loop(
     bacnet,
     devices: List[Tuple[str, int, str]],
     current: Tuple[str, int, str],
@@ -325,7 +324,7 @@ async def inspect_loop(
     return None
 
 
-async def main() -> None:
+def main() -> None:
     parser = argparse.ArgumentParser(description="Zero-config BAC0 BACnet viewer")
     parser.add_argument("--iface", help="Interface CIDR to bind", default=None)
     parser.add_argument("--interval", type=int, default=None, help="Who-Is interval")
@@ -362,7 +361,7 @@ async def main() -> None:
     try:
         while True:
             print("\n[INFO] Sending Who-Is…")
-            iams = await bacnet.who_is()
+            iams = bacnet.whois()
             devices: List[Tuple[str, int, str]] = []
             rows: List[Tuple[Any, ...]] = []
             if not iams:
@@ -389,7 +388,7 @@ async def main() -> None:
             if not sel:
                 print("[WARN] Invalid selection")
                 continue
-            result = await inspect_loop(
+            result = inspect_loop(
                 bacnet,
                 devices,
                 sel,
@@ -407,7 +406,7 @@ async def main() -> None:
                 # switched device
                 sel = result
                 continue
-            await asyncio.sleep(cfg["interval"])
+            time.sleep(cfg["interval"])
     except KeyboardInterrupt:
         print("\n[INFO] Stopped by user")
     finally:
@@ -418,4 +417,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
